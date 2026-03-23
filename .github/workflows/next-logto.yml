@@ -1,0 +1,135 @@
+name: next-logto
+
+on:
+  workflow_dispatch:
+
+jobs:
+  setup-logto:
+    runs-on: ubuntu-latest
+    env:
+      ENV_FILE: env.local
+      CALLBACK_ROUTE: app/callback/route.ts
+      SIGNIN_ROUTE: app/sign-in/route.ts
+      SIGNOUT_ROUTE: app/sign-out/route.ts
+      PROXY_FILE: proxy.ts
+      LOGTO_CONFIG: app/logto-config.ts
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '20' # Use the version of Node.js you prefer
+
+    - name: Install @logto/next
+      run: npm install @logto/next
+
+    - name: Create Config Files (.env.local & logto-config.ts)
+      run: |
+          COOKIE_SECRET=$(openssl rand -hex 32)
+          
+          cat <<EOF > ${{ env.ENV_FILE }}
+          BASE_URL=http://localhost:3000
+
+          LOGTO_ENDPOINT=
+          LOGTO_APP_ID=
+          LOGTO_APP_SECRET=
+          LOGTO_REDIRECT_URI=http://localhost:3000/callback
+          LOGTO_COOKIE_SECRET=$COOKIE_SECRET
+          EOF
+          
+          cat <<EOF > ${{ env.LOGTO_CONFIG }}
+          import { LogtoNextConfig } from '@logto/next';
+
+          export const logtoConfig: LogtoNextConfig = {
+            endpoint: process.env.LOGTO_ENDPOINT!,
+            appId: process.env.LOGTO_APP_ID!,
+            appSecret: process.env.LOGTO_APP_SECRET!,
+            baseUrl: process.env.BASE_URL!,
+            cookieSecret: process.env.LOGTO_COOKIE_SECRET!,
+            cookieSecure: process.env.NODE_ENV === 'production',
+            scopes: ["openid", "profile", "email", "offline_access"],
+          };
+          EOF
+          echo "✅ Created ${{ env.ENV_FILE }} and ${{ env.LOGTO_CONFIG }}"
+
+    - name: Create Auth Routes
+      run: |
+          mkdir -p "$(dirname "${{ env.CALLBACK_ROUTE }}")"
+          mkdir -p "$(dirname "${{ env.SIGNIN_ROUTE }}")"
+          mkdir -p "$(dirname "${{ env.SIGNOUT_ROUTE }}")"
+          
+          cat <<EOF > ${{ env.CALLBACK_ROUTE }}
+          import { handleSignIn } from '@logto/next/server-actions';
+          import { redirect } from 'next/navigation';
+          import { NextRequest } from 'next/server';
+          import { logtoConfig } from '@/app/logto-config';
+
+          export async function GET(request: NextRequest) {
+            const searchParams = request.nextUrl.searchParams;
+            await handleSignIn(logtoConfig, searchParams);
+            
+            redirect('/');
+          }
+          EOF
+          
+          cat <<EOF > ${{ env.SIGNIN_ROUTE }}
+          import { signIn } from '@logto/next/server-actions';
+          import { logtoConfig } from '@/app/logto-config';
+
+          export async function GET() {
+            return signIn(logtoConfig);
+          }
+          EOF
+          
+          cat <<EOF > ${{ env.SIGNOUT_ROUTE }}
+          import { logtoConfig } from '@/app/logto-config';
+          import { signOut } from '@logto/next/server-actions';
+
+          export async function GET() {
+            return signOut(logtoConfig);
+          }
+          EOF
+          echo "✅ Created ${{ env.CALLBACK_ROUTE }} ${{ env.SIGNIN_ROUTE }} ${{ env.SIGNOUT_ROUTE }}"
+
+    - name: Create Proxy
+      run: |
+          cat <<EOF > ${{ env.PROXY_FILE }}
+          import { NextRequest, NextResponse } from 'next/server';
+          import { getLogtoContext } from '@logto/next/server-actions';
+          import { logtoConfig } from '@/app/logto-config';
+
+          export async function proxy(request: NextRequest) {
+            const { isAuthenticated } = await getLogtoContext(logtoConfig);
+
+            if (!isAuthenticated) {
+              return NextResponse.redirect(new URL('/sign-in', request.url));
+            }
+
+            return NextResponse.next();
+          }
+
+          export const config = {
+            matcher: [
+              '/((?!callback|_next/static|_next/image|favicon.ico|public|sign-in).*)',
+            ],
+          };
+          EOF
+          echo "✅ Created ${{ env.PROXY_FILE }}"
+
+    - name: Commit changes
+      run: |
+        git init
+        git config --global user.name 'github-actions[bot]'
+        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+        git add .
+        git commit -m 'Set up React Native app with create-expo-app'
+
+    - name: Push changes
+      uses: ad-m/github-push-action@v0.6.0
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        branch: main
+        force: true

@@ -1,0 +1,87 @@
+name: next-heroui
+
+on:
+  workflow_dispatch:
+
+jobs:
+  setup-heroui:
+    runs-on: ubuntu-latest
+    env:
+      CSS_FILE: app/globals.css
+      LAYOUT_FILE: app/layout.tsx
+      PROVIDERS_FILE: app/providers.tsx
+      HERO_CONFIG: app/hero.ts
+
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+
+    - name: Set up Node.js
+      uses: actions/setup-node@v3
+      with:
+        node-version: '20' # Use the version of Node.js you prefer
+
+    - name: Install Dependencies
+      run: npm install @heroui/react framer-motion
+
+    - name: Create hero.ts config
+      run: |
+          cat <<EOF > ${{ env.HERO_CONFIG }}
+          // hero.ts
+          import { heroui } from "@heroui/react";
+          export default heroui();
+          EOF
+          echo "✅ Created ${{ env.HERO_CONFIG }}"
+
+    - name: Create Providers wrapper
+      run: |
+          cat <<EOF > ${{ env.PROVIDERS_FILE }}
+          "use client";
+
+          import * as React from "react";
+          import { HeroUIProvider } from "@heroui/react";
+
+          export function Providers({ children }: { children: React.ReactNode }) {
+            return (
+              <HeroUIProvider>
+                {children}
+              </HeroUIProvider>
+            );
+          }
+          EOF
+          echo "✅ Created ${{ env.PROVIDERS_FILE }}"
+
+    - name: Update globals.css
+      run: |
+          cat <<EOF > ${{ env.CSS_FILE }}
+          @import "tailwindcss";
+          @plugin './hero.ts';
+          @source '../../node_modules/@heroui/theme/dist/**/*.{js,ts,jsx,tsx}';
+          @custom-variant dark (&:is(.dark *));
+          EOF
+          echo "✅ Updated ${{ env.CSS_FILE }}"
+
+    - name: Inject Providers into layout.tsx
+      run: |
+          echo "Injecting imports..."
+          sed '1s/^/import { Providers } from ".\/providers";\n/' ${{ env.LAYOUT_FILE }} > ${{ env.LAYOUT_FILE }}.tmp && mv ${{ env.LAYOUT_FILE }}.tmp ${{ env.LAYOUT_FILE }}
+          
+          echo "Wrapping children..."
+          sed 's/{children}/<Providers>{children}<\/Providers>/' ${{ env.LAYOUT_FILE }} > ${{ env.LAYOUT_FILE }}.tmp && mv ${{ env.LAYOUT_FILE }}.tmp ${{ env.LAYOUT_FILE }}
+          
+          echo "✅ Wrapped children in ${{ env.LAYOUT_FILE }}"
+
+    - name: Commit changes
+      run: |
+        git init
+        git config --global user.name 'github-actions[bot]'
+        git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+        git add .
+        git commit -m 'Set up React Native app with create-expo-app'
+
+    - name: Push changes
+      uses: ad-m/github-push-action@v0.6.0
+      with:
+        github_token: ${{ secrets.GITHUB_TOKEN }}
+        branch: main
+        force: true
